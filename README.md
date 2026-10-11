@@ -4,7 +4,7 @@
 **Target Account**: [`theshahali`](https://github.com/theshahali)  
 **Repository**: [https://github.com/theshahali/autonomous-ai-compute-cluster-escrow](https://github.com/theshahali/autonomous-ai-compute-cluster-escrow)  
 **Execution Environment**: GenLayer Studio Testnet  
-**Contract Address**: [`0x8DbaFD58ebD1F21De7ACfbC0f4Eb2E4098248125`](https://explorer-studio.genlayer.com/address/0x8DbaFD58ebD1F21De7ACfbC0f4Eb2E4098248125)  
+**Contract Address**: [`0xC96e031402bf18C9eeB21C33d8f37ea00251A007`](https://explorer-studio.genlayer.com/address/0xC96e031402bf18C9eeB21C33d8f37ea00251A007)  
 
 ---
 
@@ -24,7 +24,7 @@ However, distributed model training introduces acute operational and contractual
 ### The GenLayer Intelligent Solution
 `AutonomousAiComputeClusterEscrow` provides an autonomous, verifiable legal-financial bridge on GenLayer:
 - Escrows advance cluster reservation capital backed 100% by payable native funds (`@gl.public.write.payable`).
-- Integrates multi-validator equivalence consensus (`gl.exec_prompt` + `gl.get_webpage`) to ingest official status post-mortems directly from authoritative cloud monitoring endpoints (`status.coreweave.com`, `status.lambdalabs.com`, `status.nebius.com`, `statuspage.io`, `incident.io`, `together.ai`).
+- Integrates multi-validator equivalence consensus via GenLayer Equivalence Principle (`gl.eq_principle.prompt_non_comparative` + `gl.nondet.web.render`) where all validators independently refetch official status post-mortems directly from authoritative cloud monitoring endpoints (`status.coreweave.com`, `status.lambdalabs.com`, `status.nebius.com`, `statuspage.io`, `incident.io`, `together.ai`) and evaluate strict criteria.
 - Employs strict consensus heuristics to classify incident post-mortems:
   - **SLA_BREACH_CONFIRMED**: Confirms unexcused provider infrastructure/fabric outage ($\ge 60$ minutes downtime) $\rightarrow$ Automatically refunds 100% remaining advance collateral to the AI client and returns the claimant's dispute bond.
   - **CLAIM_REFUTED**: Frivolous or user-caused claim $\rightarrow$ Slashes claim bond to the compute provider's indemnity reserve balance.

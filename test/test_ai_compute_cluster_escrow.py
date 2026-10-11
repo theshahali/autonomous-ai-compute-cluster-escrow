@@ -7,22 +7,14 @@ import re
 from datetime import datetime, timezone
 
 
-class MockGL:
-    def __init__(self):
-        self.transfers = []
-        self.mock_web_responses = {}
-        self.fail_web_fetch = False
-        self.simulate_transfer_fail = False
+class MockWeb:
+    def __init__(self, gl):
+        self.gl = gl
 
-    def emit_transfer(self, recipient: str, amount: int):
-        if self.simulate_transfer_fail:
-            raise RuntimeError("Simulated EVM transfer failure")
-        self.transfers.append({"recipient": str(recipient).lower(), "amount": int(amount)})
-
-    def get_webpage(self, url: str) -> str:
-        if self.fail_web_fetch:
+    def render(self, url: str, mode: str = "text") -> str:
+        if self.gl.fail_web_fetch:
             raise RuntimeError("Simulated network timeout connecting to cloud status page")
-        return self.mock_web_responses.get(
+        return self.gl.mock_web_responses.get(
             url,
             "<html><body><h1>CoreWeave Cloud Incident Post-Mortem: INC-88291</h1>"
             "<p>Cluster: US-EAST-01 H100 InfiniBand Fabric Partition. "
@@ -30,13 +22,46 @@ class MockGL:
             "Total Unplanned Downtime: 145 minutes. Root cause: Hardware switch failure, not user software or maintenance. SLA Breach Confirmed.</p></body></html>"
         )
 
-    def exec_prompt(self, prompt: str) -> str:
-        return json.dumps({
-            "sla_breach_confirmed": True,
+
+class MockNondet:
+    def __init__(self, gl):
+        self.web = MockWeb(gl)
+
+
+class MockEqPrinciple:
+    def __init__(self, gl):
+        self.gl = gl
+
+    def prompt_non_comparative(self, get_input_fn, task="", criteria=""):
+        input_data = get_input_fn()
+        if self.gl.corrupt_llm_json:
+            return "This is a corrupted non-JSON LLM response that would normally cause JSONDecodeError."
+        return self.gl.consensus_return_value
+
+
+class MockGL:
+    def __init__(self):
+        self.transfers = []
+        self.mock_web_responses = {}
+        self.fail_web_fetch = False
+        self.simulate_transfer_fail = False
+        self.corrupt_llm_json = False
+        self.nondet = MockNondet(self)
+        self.eq_principle = MockEqPrinciple(self)
+        self.consensus_return_value = json.dumps({
+            "cluster_matched": True,
+            "provider_fault_confirmed": True,
             "verified_downtime_minutes": 145,
+            "sla_breach_confirmed": True,
             "confidence_score": 95,
+            "verdict": "SLA_BREACH_CONFIRMED",
             "rationale": "Provider infrastructure InfiniBand partition outage lasting 145 minutes confirmed."
         })
+
+    def emit_transfer(self, recipient: str, amount: int):
+        if self.simulate_transfer_fail:
+            raise RuntimeError("Simulated EVM transfer failure")
+        self.transfers.append({"recipient": str(recipient).lower(), "amount": int(amount)})
 
 
 class MockAutonomousAiComputeClusterEscrow:
@@ -352,18 +377,45 @@ class MockAutonomousAiComputeClusterEscrow:
 
         e = self.escrows[clm["escrow_id"]]
 
-        try:
-            incident_text = self.gl.get_webpage(clm["incident_report_url"])
-        except Exception:
-            raise AssertionError("[ERR_EVIDENCE_FETCH_FAILED] Consensus could not fetch incident telemetry.")
+        incident_url = clm["incident_report_url"]
+        cluster_id = e["cluster_identifier"]
+        gpu_count_val = str(e["gpu_count"])
+        reported_downtime_val = str(clm["reported_downtime_minutes"])
 
-        assert incident_text is not None and len(incident_text.strip()) >= 30, "[ERR_EVIDENCE_FETCH_FAILED] Telemetry response too short."
+        def get_input() -> str:
+            try:
+                raw_data = self.gl.nondet.web.render(incident_url, mode="text")
+            except Exception:
+                raise AssertionError("[ERR_EVIDENCE_FETCH_FAILED] Consensus could not fetch incident telemetry from " + incident_url)
+            assert raw_data is not None and len(raw_data.strip()) >= 30, \
+                "[ERR_EVIDENCE_FETCH_FAILED] Telemetry response too short."
+            cleaned = re.sub(r'<[^>]+>', ' ', raw_data)
+            return f"Cluster: {cluster_id}\nGPUs: {gpu_count_val}\nReported Downtime: {reported_downtime_val}\n\n{cleaned}"
 
-        # HTML sanitization (HIGH-02)
-        cleaned_text = re.sub(r'<script[^>]*>.*?</script>', ' ', incident_text, flags=re.DOTALL | re.IGNORECASE)
-        cleaned_text = re.sub(r'<style[^>]*>.*?</style>', ' ', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
-        cleaned_text = re.sub(r'<[^>]+>', ' ', cleaned_text)
-        cleaned_text = ' '.join(cleaned_text.split())
+        task = "Auditor Task: Analyze compute incident telemetry."
+        criteria = "Auditor Criteria: Independently verify SLA downtime."
+
+        if simulate_parse_error:
+            self.gl.corrupt_llm_json = True
+        elif custom_breach is not None and custom_downtime is not None:
+            self.gl.corrupt_llm_json = False
+            self.gl.consensus_return_value = json.dumps({
+                "cluster_matched": True,
+                "provider_fault_confirmed": custom_breach,
+                "verified_downtime_minutes": custom_downtime,
+                "sla_breach_confirmed": custom_breach,
+                "confidence_score": custom_conf if custom_conf is not None else 85,
+                "verdict": "SLA_BREACH_CONFIRMED" if custom_breach else "CLAIM_REFUTED",
+                "rationale": "Test SLA incident adjudication verdict."
+            })
+        else:
+            self.gl.corrupt_llm_json = False
+
+        consensus_result = self.gl.eq_principle.prompt_non_comparative(
+            get_input,
+            task=task,
+            criteria=criteria
+        )
 
         parse_valid = False
         parsed_breach = False
@@ -371,37 +423,20 @@ class MockAutonomousAiComputeClusterEscrow:
         confidence = 0
         rationale = "Consensus fallback resolution."
 
-        if simulate_parse_error:
-            parse_valid = False
-        elif custom_breach is not None and custom_downtime is not None:
-            raw_resp = json.dumps({
-                "sla_breach_confirmed": custom_breach,
-                "verified_downtime_minutes": custom_downtime,
-                "confidence_score": custom_conf if custom_conf is not None else 85,
-                "rationale": "Test SLA incident adjudication verdict."
-            })
-            parsed = json.loads(raw_resp)
+        try:
+            clean_json = consensus_result.strip()
+            if "```json" in clean_json:
+                clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+            elif "```" in clean_json:
+                clean_json = clean_json.split("```")[1].split("```")[0].strip()
+            parsed = json.loads(clean_json)
             parsed_breach = bool(parsed.get("sla_breach_confirmed", False))
             parsed_downtime = int(parsed.get("verified_downtime_minutes", 0))
             confidence = int(parsed.get("confidence_score", 0))
             rationale = parsed.get("rationale", "")
             parse_valid = True
-        else:
-            raw_resp = self.gl.exec_prompt("Prompt")
-            try:
-                clean_json = raw_resp.strip()
-                if "```json" in clean_json:
-                    clean_json = clean_json.split("```json")[1].split("```")[0].strip()
-                elif "```" in clean_json:
-                    clean_json = clean_json.split("```")[1].split("```")[0].strip()
-                parsed = json.loads(clean_json)
-                parsed_breach = bool(parsed.get("sla_breach_confirmed", False))
-                parsed_downtime = int(parsed.get("verified_downtime_minutes", 0))
-                confidence = int(parsed.get("confidence_score", 0))
-                rationale = parsed.get("rationale", "")
-                parse_valid = True
-            except Exception:
-                parse_valid = False
+        except Exception:
+            parse_valid = False
 
         # CRIT-01 Safe Inconclusive Fallback & HIGH-02 Confidence Weighting
         if parse_valid and parsed_breach and parsed_downtime >= self.SLA_DOWNTIME_BREACH_THRESHOLD_MINUTES and confidence >= 70:

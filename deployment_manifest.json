@@ -1,12 +1,12 @@
 {
   "contractName": "AutonomousAiComputeClusterEscrow",
-  "contractAddress": "0x8DbaFD58ebD1F21De7ACfbC0f4Eb2E4098248125",
-  "transactionHash": "0x3b3a14fc8a037b2a3a100b4145023cebbabbc6a7c1c1ee617dc0e52228ac6214",
-  "deployerAddress": "0xF98FD5f0BFed54A1f10623B849dbB8c41F84a114",
+  "contractAddress": "0xC96e031402bf18C9eeB21C33d8f37ea00251A007",
+  "transactionHash": "0x9498afe1ff9524a0baf859d21261718377f98ab4a539bd8631752bbf66d19da7",
+  "deployerAddress": "0x3549CCc5DC95512Df8c06909636870536691c645",
   "network": "GenLayer Studio Testnet",
   "rpcEndpoint": "https://studio.genlayer.com/api",
-  "explorerUrl": "https://explorer-studio.genlayer.com/address/0x8DbaFD58ebD1F21De7ACfbC0f4Eb2E4098248125",
-  "deployedAt": "2026-10-11T19:33:59.164Z",
+  "explorerUrl": "https://explorer-studio.genlayer.com/address/0xC96e031402bf18C9eeB21C33d8f37ea00251A007",
+  "deployedAt": "2026-10-11T20:18:24.967Z",
   "initialState": {
     "totalEscrowsCreated": 0,
     "totalVolumeLockedWei": "0",
