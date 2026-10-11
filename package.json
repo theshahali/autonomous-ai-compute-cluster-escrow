@@ -1,0 +1,21 @@
+{
+  "name": "autonomous-ai-compute-cluster-escrow",
+  "version": "1.0.0",
+  "description": "Autonomous AI GPU Training Compute Cluster SLA and Interconnect Outage Escrow on GenLayer",
+  "main": "scripts/deploy_ai_compute_cluster_escrow.mjs",
+  "type": "module",
+  "scripts": {
+    "test": "python test/test_ai_compute_cluster_escrow.py",
+    "deploy": "node scripts/deploy_ai_compute_cluster_escrow.mjs"
+  },
+  "keywords": [
+    "genlayer",
+    "intelligent-contracts",
+    "ai-compute",
+    "sla-escrow",
+    "gpu-cluster",
+    "infiniband"
+  ],
+  "author": "theshahali",
+  "license": "MIT"
+}
