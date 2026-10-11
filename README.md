@@ -4,7 +4,7 @@
 **Target Account**: [`theshahali`](https://github.com/theshahali)  
 **Repository**: [https://github.com/theshahali/autonomous-ai-compute-cluster-escrow](https://github.com/theshahali/autonomous-ai-compute-cluster-escrow)  
 **Execution Environment**: GenLayer Studio Testnet  
-**Contract Address**: [`0x820D2979203C3C9d57f39765aECaCFF662716092`](https://explorer-studio.genlayer.com/address/0x820D2979203C3C9d57f39765aECaCFF662716092)  
+**Contract Address**: [`0x8DbaFD58ebD1F21De7ACfbC0f4Eb2E4098248125`](https://explorer-studio.genlayer.com/address/0x8DbaFD58ebD1F21De7ACfbC0f4Eb2E4098248125)  
 
 ---
 

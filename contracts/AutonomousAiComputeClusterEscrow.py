@@ -34,16 +34,22 @@ MIN_CLAIM_BOND = 25_000_000_000            # 25 Gwei minimum dispute bond
 MIN_LEASE_DURATION = 86400 * 7             # 7 days minimum training run
 MAX_LEASE_DURATION = 86400 * 365 * 2       # 2 years maximum lease window
 CLAIM_TIMEOUT_SECONDS = 86400 * 7          # 7 days unreachability recovery timeout
+IDLE_EXPIRY_GRACE_PERIOD = 86400 * 2       # 2 days provider priority claim window before idle recovery
 SLA_DOWNTIME_BREACH_THRESHOLD_MINUTES = 60 # 60 minutes minimum cluster downtime for SLA violation
 
-# Approved Cloud Monitoring & Telemetry Domains (SSRF Defense Whitelist)
+# Approved Cloud Monitoring & Telemetry Domains (SSRF Defense Whitelist - CRIT-03 Remediated)
+# Excludes generic multi-tenant SaaS wildcards (statuspage.io, incident.io) to prevent subdomain forgery
 APPROVED_TELEMETRY_DOMAINS = (
     "status.coreweave.com",
     "status.lambdalabs.com",
     "status.nebius.com",
-    "statuspage.io",
-    "incident.io",
-    "together.ai"
+    "status.aws.amazon.com",
+    "status.cloud.google.com",
+    "status.azure.com",
+    "lambdalabs.com",
+    "coreweave.com",
+    "together.ai",
+    "runpod.io"
 )
 
 
@@ -209,6 +215,8 @@ class AutonomousAiComputeClusterEscrow:
         assert client_hex != provider_hex, "[ERR_IDENTICAL_PARTIES] AI client and compute provider cannot be the same address."
 
         clean_cluster_id = self._sanitize_string(cluster_identifier, 4, 64, "Cluster Identifier")
+        assert re.match(r'^[a-zA-Z0-9_\-\. ]{4,64}$', clean_cluster_id), \
+            "[ERR_INVALID_CLUSTER_ID] Cluster identifier must only contain alphanumeric characters, spaces, underscores, hyphens, and periods."
         clean_gpu_count = int(gpu_count)
         assert clean_gpu_count > 0 and clean_gpu_count <= 65536, "[ERR_INVALID_GPU_COUNT] GPU count must be between 1 and 65,536."
 
@@ -327,13 +335,68 @@ class AutonomousAiComputeClusterEscrow:
         )
 
     # --------------------------------------------------------------------------
-    # Core Function 5: Claim Expired Idle Escrow
+    # Core Function 5: Claim Completed Lease Payout (Symmetric Provider Right - CRIT-01 Remediated)
+    # --------------------------------------------------------------------------
+    @gl.public.write
+    def claim_completed_lease_payout(self, escrow_id: str) -> str:
+        """
+        Allows the compute provider (or AI client / owner) to disburse advance collateral
+        to the compute provider once the lease deadline has elapsed without an active dispute.
+        Guarantees symmetric economic rights for compute providers (CRIT-01 Remediated).
+        """
+        clean_e_id = escrow_id.strip().upper()
+        assert clean_e_id in self.escrows, "[ERR_ESCROW_NOT_FOUND] Target cluster escrow record not found."
+        escrow = self.escrows[clean_e_id]
+        assert escrow.status == STATUS_ACTIVE, \
+            "[ERR_ESCROW_NOT_ACTIVE] Escrow must be in ACTIVE status (cannot claim payout while DISPUTED or terminal)."
+
+        sender_hex = self._validate_eth_address(str(gl.message.sender), "Caller").lower()
+        owner_hex = self._validate_eth_address(str(self.owner), "Owner").lower()
+        assert sender_hex in (escrow.provider, escrow.ai_client, owner_hex), \
+            "[ERR_UNAUTHORIZED] Only provider, AI client, or owner can trigger completed lease payout."
+
+        now_utc = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        assert now_utc > int(escrow.lease_deadline), \
+            "[ERR_DEADLINE_NOT_REACHED] Cluster lease deadline has not yet elapsed."
+
+        amt = int(escrow.advance_collateral)
+        assert amt > 0, "[ERR_ZERO_COLLATERAL] No collateral remaining to disburse."
+
+        escrow.status = STATUS_FULFILLED
+        escrow.total_released_to_provider += u256(amt)
+        escrow.advance_collateral = u256(0)
+        self.escrows[clean_e_id] = escrow
+        self.total_collateral_released += u256(amt)
+
+        transfer_succeeded = False
+        try:
+            gl.emit_transfer(Address(escrow.provider), u256(amt))
+            transfer_succeeded = True
+        except Exception:
+            transfer_succeeded = False
+
+        if transfer_succeeded:
+            if int(self.total_volume_locked) >= amt:
+                self.total_volume_locked -= u256(amt)
+            else:
+                self.total_volume_locked = u256(0)
+        else:
+            cur = int(self.claimable_balances.get(escrow.provider, u256(0)))
+            self.claimable_balances[escrow.provider] = u256(cur + amt)
+
+        return (
+            "LEASE_PAYOUT_CLAIMED: " + clean_e_id + " | Disbursed: " + str(amt)
+            + " wei to Provider " + escrow.provider
+        )
+
+    # --------------------------------------------------------------------------
+    # Core Function 5b: Claim Expired Idle Escrow (AI Client Recovery after Grace Window)
     # --------------------------------------------------------------------------
     @gl.public.write
     def claim_expired_idle_escrow(self, escrow_id: str) -> str:
         """
         Allows the AI client to reclaim unutilized collateral if the lease deadline has elapsed
-        without fulfillment or active dispute.
+        plus the 2-day provider priority window without fulfillment or active dispute.
         Prevents settlement if escrow is currently disputed (HIGH-01 Remediated).
         """
         clean_e_id = escrow_id.strip().upper()
@@ -343,12 +406,13 @@ class AutonomousAiComputeClusterEscrow:
             "[ERR_ESCROW_NOT_ACTIVE] Escrow must be in ACTIVE status (cannot reclaim while DISPUTED or terminal)."
 
         sender_hex = self._validate_eth_address(str(gl.message.sender), "Caller").lower()
-        assert sender_hex == escrow.ai_client, \
-            "[ERR_UNAUTHORIZED] Only the AI client can reclaim expired cluster escrow."
+        owner_hex = self._validate_eth_address(str(self.owner), "Owner").lower()
+        assert sender_hex in (escrow.ai_client, owner_hex), \
+            "[ERR_UNAUTHORIZED] Only the AI client (or contract owner) can reclaim expired cluster escrow."
 
         now_utc = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
-        assert now_utc > int(escrow.lease_deadline), \
-            "[ERR_DEADLINE_NOT_REACHED] Cluster lease deadline has not yet elapsed."
+        assert now_utc > int(escrow.lease_deadline) + IDLE_EXPIRY_GRACE_PERIOD, \
+            "[ERR_DEADLINE_NOT_REACHED] Must wait until cluster lease deadline plus 2-day provider claim window elapses."
 
         amt = int(escrow.advance_collateral)
         assert amt > 0, "[ERR_ZERO_COLLATERAL] No collateral remaining to refund."
@@ -407,6 +471,9 @@ class AutonomousAiComputeClusterEscrow:
             "[ERR_DEADLINE_ELAPSED] Cluster lease deadline has already elapsed."
 
         sender_hex = self._validate_eth_address(str(gl.message.sender), "Claimant").lower()
+        owner_hex = self._validate_eth_address(str(self.owner), "Owner").lower()
+        assert sender_hex in (escrow.ai_client, owner_hex), \
+            "[ERR_UNAUTHORIZED_CLAIMANT] Only the AI client (or contract owner) can submit an SLA breach claim against this cluster lease."
         clean_url = self._validate_incident_url(incident_report_url)
         clean_nonce = self._sanitize_string(nonce, 1, 64, "Nonce")
 
@@ -525,6 +592,10 @@ class AutonomousAiComputeClusterEscrow:
             elif "```" in clean_json:
                 clean_json = clean_json.split("```")[1].split("```")[0].strip()
 
+            match = re.search(r'\{[^{}]*\}', clean_json, re.DOTALL)
+            if match:
+                clean_json = match.group(0)
+
             parsed = json.loads(clean_json)
             parsed_breach = bool(parsed.get("sla_breach_confirmed", False))
             raw_dt = parsed.get("verified_downtime_minutes", 0)
@@ -537,13 +608,13 @@ class AutonomousAiComputeClusterEscrow:
         except Exception:
             parse_valid = False
 
-        # Strict Metric Binding (CRIT-01 Remediated: Safe Inconclusive Fallback)
+        # Strict Metric Binding (HIGH-02 Remediated: Confidence-Weighted Classification)
         if parse_valid and parsed_breach and parsed_downtime >= SLA_DOWNTIME_BREACH_THRESHOLD_MINUTES and confidence >= 70:
             final_verdict = CLAIM_SLA_BREACH_CONFIRMED
-        elif parse_valid and (not parsed_breach or parsed_downtime < SLA_DOWNTIME_BREACH_THRESHOLD_MINUTES or confidence < 30):
+        elif parse_valid and confidence >= 70 and (not parsed_breach or parsed_downtime < SLA_DOWNTIME_BREACH_THRESHOLD_MINUTES):
             final_verdict = CLAIM_REFUTED
         else:
-            final_verdict = CLAIM_INCONCLUSIVE  # Safe fallback preserves claimant bond!
+            final_verdict = CLAIM_INCONCLUSIVE  # Safe fallback preserves claimant bond on low confidence (< 70) or parse anomaly!
 
         now_utc = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         clm.adjudicated_at = u256(now_utc)
@@ -613,6 +684,11 @@ class AutonomousAiComputeClusterEscrow:
             # Unlock escrow back to ACTIVE
             escrow.status = STATUS_ACTIVE
 
+            # Reset incident record so claimant can re-file if conclusive telemetry is published later (MED-01 Remediated)
+            inc_key = clm.escrow_id + "::" + clm.incident_report_url.lower()
+            if inc_key in self.consumed_escrow_incidents:
+                self.consumed_escrow_incidents[inc_key] = False
+
             transfer_claimant = False
             try:
                 gl.emit_transfer(Address(clm.claimant), u256(bond_val))
@@ -636,20 +712,26 @@ class AutonomousAiComputeClusterEscrow:
         return "CLAIM_ADJUDICATED: " + clean_c_id + " | Verdict: " + final_verdict
 
     # --------------------------------------------------------------------------
-    # Core Function 8: 7-Day Timeout SLA Bond Safeguard
+    # Core Function 8: 7-Day Timeout SLA Bond Safeguard (CRIT-02 Remediated)
     # --------------------------------------------------------------------------
     @gl.public.write
     def claim_abandoned_sla_bond(self, claim_id: str) -> str:
         """
-        Allows claimant to recover their bond if cloud telemetry endpoints remain
-        unreachable for 7 days after filing. Unlocks escrow upon abandonment.
+        Allows claimant, AI client, provider, or owner to resolve the abandoned claim and recover the bond
+        if cloud telemetry endpoints remain unreachable for 7 days after filing.
+        Unlocks escrow upon abandonment (CRIT-02 Remediated).
         """
         clean_c_id = claim_id.strip().upper()
         assert clean_c_id in self.claims, "[ERR_CLAIM_NOT_FOUND] Target claim does not exist."
         clm = self.claims[clean_c_id]
 
         sender_hex = self._validate_eth_address(str(gl.message.sender), "Caller").lower()
-        assert sender_hex == clm.claimant, "[ERR_UNAUTHORIZED] Only claimant can recover bond."
+        owner_hex = self._validate_eth_address(str(self.owner), "Owner").lower()
+        assert clm.escrow_id in self.escrows, "[ERR_ESCROW_NOT_FOUND] Escrow record not found."
+        escrow = self.escrows[clm.escrow_id]
+
+        assert sender_hex in (clm.claimant, escrow.ai_client, escrow.provider, owner_hex), \
+            "[ERR_UNAUTHORIZED] Only claimant, AI client, provider, or owner can resolve abandoned claim."
         assert clm.verdict == CLAIM_PENDING, "[ERR_CLAIM_NOT_PENDING] Claim is not pending adjudication."
 
         now_utc = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
@@ -662,16 +744,19 @@ class AutonomousAiComputeClusterEscrow:
         clm.adjudication_rationale = "Recovered after 7-day telemetry ingestion timeout."
         self.claims[clean_c_id] = clm
 
+        # Reset consumed incident record so it can be re-filed if telemetry recovers (MED-01 Remediated)
+        inc_key = clm.escrow_id + "::" + clm.incident_report_url.lower()
+        if inc_key in self.consumed_escrow_incidents:
+            self.consumed_escrow_incidents[inc_key] = False
+
         # Unlock escrow back to ACTIVE
-        if clm.escrow_id in self.escrows:
-            e = self.escrows[clm.escrow_id]
-            if e.status == STATUS_DISPUTED:
-                e.status = STATUS_ACTIVE
-                self.escrows[clm.escrow_id] = e
+        if escrow.status == STATUS_DISPUTED:
+            escrow.status = STATUS_ACTIVE
+            self.escrows[clm.escrow_id] = escrow
 
         transfer_succeeded = False
         try:
-            gl.emit_transfer(Address(sender_hex), u256(bond_val))
+            gl.emit_transfer(Address(clm.claimant), u256(bond_val))
             transfer_succeeded = True
         except Exception:
             transfer_succeeded = False
@@ -682,8 +767,8 @@ class AutonomousAiComputeClusterEscrow:
             else:
                 self.total_volume_locked = u256(0)
         else:
-            cur = int(self.claimable_balances.get(sender_hex, u256(0)))
-            self.claimable_balances[sender_hex] = u256(cur + bond_val)
+            cur = int(self.claimable_balances.get(clm.claimant, u256(0)))
+            self.claimable_balances[clm.claimant] = u256(cur + bond_val)
 
         return "BOND_RECLAIMED: " + clean_c_id + " | Amount: " + str(bond_val) + " wei"
 
