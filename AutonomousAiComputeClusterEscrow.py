@@ -1,6 +1,5 @@
 # AutonomousAiComputeClusterEscrow.py
 # GenLayer Intelligent Contract: Autonomous AI Training Compute Cluster SLA & GPU Interconnect Outage Escrow
-# Target Account: theshahali (https://github.com/theshahali)
 # Execution Standard: GenLayer Intelligent Contract v0.2.1
 
 import json

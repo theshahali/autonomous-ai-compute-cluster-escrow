@@ -1,7 +1,6 @@
 # AutonomousAiComputeClusterEscrow
 ### Autonomous AI GPU Training Compute Cluster SLA & Interconnect Outage Escrow
 **Protocol Standard**: GenLayer Intelligent Contract v0.2.1  
-**Target Account**: [`theshahali`](https://github.com/theshahali)  
 **Repository**: [https://github.com/theshahali/autonomous-ai-compute-cluster-escrow](https://github.com/theshahali/autonomous-ai-compute-cluster-escrow)  
 **Execution Environment**: GenLayer Studio Testnet  
 **Contract Address**: [`0xC96e031402bf18C9eeB21C33d8f37ea00251A007`](https://explorer-studio.genlayer.com/address/0xC96e031402bf18C9eeB21C33d8f37ea00251A007)  
